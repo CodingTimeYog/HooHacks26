@@ -32,79 +32,91 @@ _EIA_KEY = os.getenv("EIA_API_KEY", "")
 
 def _fetch_eia_ng_spot() -> pd.Series | None:
     """
-    Fetch US natural gas wellhead price ($/MCF ≈ $/MMBtu) from EIA API v2.
-    Uses duoarea=NUS + process=FWA (Wellhead Acquisition Price) — the correct
-    v2 facet equivalent of the retired v1 series RNGWHHD.
+    Fetch Henry Hub daily spot price ($/MMBtu) from EIA API v2 and resample
+    to monthly average. This is the actual market benchmark price.
     Returns None on any failure.
     """
     if not _EIA_KEY:
         return None
     try:
         r = requests.get(
-            "https://api.eia.gov/v2/natural-gas/pri/sum/data/",
+            "https://api.eia.gov/v2/natural-gas/pri/fut/data/",
             params={
                 "api_key":              _EIA_KEY,
-                "frequency":            "monthly",
+                "frequency":            "daily",
                 "data[0]":              "value",
-                "facets[duoarea][]":    "NUS",
-                "facets[process][]":    "FWA",
-                "facets[product][]":    "EPG0",
+                "facets[series][]":     "RNGWHHD",
                 "sort[0][column]":      "period",
                 "sort[0][direction]":   "desc",
-                "length":               360,
+                "length":               5000,
             },
-            timeout=25,
+            timeout=30,
         )
         r.raise_for_status()
         rows = r.json()["response"]["data"]
-        if not rows:
+        valid_rows = [row for row in rows if row.get("value") is not None and row.get("period")]
+        if not valid_rows:
             print("     [EIA] NG spot — empty response, using local file.")
             return None
-        s = pd.Series(
-            {pd.Timestamp(row["period"] + "-01"): float(row["value"]) for row in rows},
-            name="ng_spot",
-        ).sort_index()
-        print(f"     [EIA] NG spot fetched — latest: {s.index[-1].strftime('%Y-%m')} (${s.iloc[-1]:.2f}/MCF)")
+
+        dates  = pd.to_datetime([row["period"] for row in valid_rows], errors="coerce")
+        values = [float(row["value"]) for row in valid_rows]
+
+        s = pd.Series(values, index=dates, name="ng_spot").dropna().sort_index()
+        # Daily → monthly average (Henry Hub publishes daily)
+        s = s.resample("MS").mean()
+
+        print(f"     [EIA] NG spot fetched — latest: {s.index[-1].strftime('%Y-%m')} (${s.iloc[-1]:.2f}/MMBtu)")
         return s
     except Exception as exc:
         print(f"     [EIA] NG spot fetch failed ({exc}) — using local file.")
         return None
 
-
 def _fetch_eia_ng_storage() -> pd.Series | None:
     """
     Fetch US underground working gas storage (MMcf) from EIA API v2.
-    Route: natural-gas/stor/sum/dcu/nus/m  — returns None on any failure.
-    EIA returns values in Bcf; we convert to MMcf (* 1000) to match local file.
+    Uses the weekly storage endpoint, filtered to total US working gas (NUS).
+    EIA returns values in Bcf; we convert to MMcf (* 1000).
+    Returns None on any failure.
     """
     if not _EIA_KEY:
         return None
     try:
         r = requests.get(
-            "https://api.eia.gov/v2/natural-gas/stor/sum/dcu/nus/m/data/",
+            "https://api.eia.gov/v2/natural-gas/stor/wkly/data/",
             params={
                 "api_key":              _EIA_KEY,
-                "frequency":            "monthly",
+                "frequency":            "weekly",
                 "data[0]":              "value",
+                "facets[duoarea][]":    "NUS",
+                "facets[process][]":    "SAO",
                 "sort[0][column]":      "period",
                 "sort[0][direction]":   "desc",
-                "length":               360,
+                "length":               2000,
             },
-            timeout=25,
+            timeout=30,
         )
         r.raise_for_status()
         rows = r.json()["response"]["data"]
-        s = pd.Series(
-            {pd.Timestamp(row["period"] + "-01"): float(row["value"]) * 1000
-             for row in rows},
-            name="storage_mmcf",
-        ).sort_index()
+        valid_rows = [row for row in rows if row.get("value") is not None and row.get("period")]
+        if not valid_rows:
+            print("     [EIA] Storage — empty response, using local file.")
+            return None
+
+        dates  = pd.to_datetime([row["period"] for row in valid_rows], errors="coerce")
+        values = [float(row["value"]) * 1000 for row in valid_rows]
+
+        s = pd.Series(values, index=dates, name="storage_mmcf").dropna().sort_index()
+        # Some weekly endpoints have multiple rows per date (duplicates) — average them
+        s = s.groupby(s.index).mean()
+        # Resample weekly → monthly (last reading of each month)
+        s = s.resample("MS").last()
+
         print(f"     [EIA] Storage fetched — latest: {s.index[-1].strftime('%Y-%m')} ({s.iloc[-1]:,.0f} MMcf)")
         return s
     except Exception as exc:
         print(f"     [EIA] Storage fetch failed ({exc}) — using local file.")
         return None
-
 
 # ── Local file loaders (fallback) ─────────────────────────────────────────────
 
@@ -171,12 +183,22 @@ def run_ingestion(start: str = "2018-01", end: str | None = None) -> dict:
       'dap'          — monthly DAP price ($/mt)
       'storage_mmcf' — monthly underground storage working gas (MMcf)
 
-    FORCED TO LOCAL FILES: EIA API fetching is disabled to ensure offline-first 
-    speed and reliability as per user requirement.
+    Tries EIA API v2 first for nat gas spot and storage. Falls back to local
+    files if the API fails. Urea/DAP come from World Bank Pink Sheet (no live
+    free source exists for fertilizer prices).
     """
-    # Force local loaders
-    ng = load_ng_monthly()
-    stor = load_ng_storage()
+    # Try EIA API first; fall back to local files if it fails
+    ng = _fetch_eia_ng_spot()
+    if ng is None:
+        print("     [EIA] Using local NG spot file.")
+        ng = load_ng_monthly()
+
+    stor = _fetch_eia_ng_storage()
+    if stor is None:
+        print("     [EIA] Using local storage file.")
+        stor = load_ng_storage()
+
+    # Urea/DAP: World Bank only — no live API
     fert = load_fertilizer_prices()
 
     # Determine end date: use latest month present across all series
@@ -196,7 +218,6 @@ def run_ingestion(start: str = "2018-01", end: str | None = None) -> dict:
         "dap":          fert["dap"].reindex(idx).rename("dap"),
         "storage_mmcf": stor.reindex(idx).rename("storage_mmcf"),
     }
-
 
 def load_full_history() -> dict:
     """

@@ -7,7 +7,9 @@ services:
       - .env
     volumes:
       - db_data:/app/db
+      - ./backend:/app/backend      # ← add this line
+      - ./app.py:/app/app.py        # ← and this
+      - ./pages:/app/pages          # ← and this
     restart: unless-stopped
-
 volumes:
   db_data:
