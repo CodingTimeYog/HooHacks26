@@ -10,6 +10,8 @@ services:
       - ./backend:/app/backend      # ← add this line
       - ./app.py:/app/app.py        # ← and this
       - ./pages:/app/pages          # ← and this
+      - ./data:/app/data   
+
     restart: unless-stopped
 volumes:
   db_data:

@@ -32,8 +32,9 @@ _EIA_KEY = os.getenv("EIA_API_KEY", "")
 
 def _fetch_eia_ng_spot() -> pd.Series | None:
     """
-    Fetch Henry Hub daily spot price ($/MMBtu) from EIA API v2 and resample
-    to monthly average. This is the actual market benchmark price.
+    Fetch Henry Hub spot price ($/MMBtu) from EIA API v2, then merge with
+    local CSV to get full history back to 1997. EIA data takes precedence
+    for recent months where both overlap.
     Returns None on any failure.
     """
     if not _EIA_KEY:
@@ -62,16 +63,28 @@ def _fetch_eia_ng_spot() -> pd.Series | None:
         dates  = pd.to_datetime([row["period"] for row in valid_rows], errors="coerce")
         values = [float(row["value"]) for row in valid_rows]
 
-        s = pd.Series(values, index=dates, name="ng_spot").dropna().sort_index()
-        # Daily → monthly average (Henry Hub publishes daily)
-        s = s.resample("MS").mean()
+        # Daily → monthly average
+        live = pd.Series(values, index=dates, name="ng_spot").dropna().sort_index()
+        live = live.resample("MS").mean()
 
-        print(f"     [EIA] NG spot fetched — latest: {s.index[-1].strftime('%Y-%m')} (${s.iloc[-1]:.2f}/MMBtu)")
-        return s
+        # Load local CSV for full history back to 1997
+        local = load_ng_monthly()
+
+        # Merge: local provides backbone, live EIA overwrites recent months
+        combined = local.copy()
+        combined.update(live)
+        # Extend beyond local file's end date with live data
+        new_months = live[live.index > local.index.max()]
+        combined = pd.concat([combined, new_months]).sort_index()
+        combined.name = "ng_spot"
+
+        print(f"     [EIA] NG spot merged — {combined.index[0].strftime('%Y-%m')} to {combined.index[-1].strftime('%Y-%m')} ({len(combined)} months)")
+        return combined
+
     except Exception as exc:
         print(f"     [EIA] NG spot fetch failed ({exc}) — using local file.")
         return None
-
+    
 def _fetch_eia_ng_storage() -> pd.Series | None:
     """
     Fetch US underground working gas storage (MMcf) from EIA API v2.
