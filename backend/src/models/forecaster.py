@@ -14,11 +14,16 @@ from sklearn.metrics import mean_absolute_error
 import xgboost as xgb
 
 
+
 from src.features.engineer import FEATURE_COLS, TARGET_COLS
 
 _THIS      = os.path.dirname(os.path.abspath(__file__))
 ROOT       = os.path.normpath(os.path.join(_THIS, "..", "..", ".."))
 MODELS_DIR = os.path.join(ROOT, "data", "models")
+
+import wandb
+from dotenv import load_dotenv
+load_dotenv(os.path.join(ROOT, ".env"))
 
 XGB_PARAMS = {
     "n_estimators":     100,
@@ -65,7 +70,7 @@ def train(feature_store: pd.DataFrame) -> dict:
     df_train = feature_store.dropna(subset=FEATURE_COLS + TARGET_COLS).copy()
 
     # NEW CODE: Pure Direction (Aligns perfectly with the Momentum features)
-    for horizon in [1, 2, 3]:
+    for horizon in [1, 2, 3]:            
         target_col = f"target_urea_t{horizon}"
         df_train.loc[:, f"dir_t{horizon}"] = (
             df_train[target_col] > df_train["urea"]
@@ -88,23 +93,31 @@ def train(feature_store: pd.DataFrame) -> dict:
         "n_jobs":           -1,
     }
     for horizon, target_col in enumerate(TARGET_COLS, start=1):
+        wandb.init(
+            project="foregast",
+            name=f"t{horizon}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}",
+            config={
+                "horizon_days":     horizon * 30,
+                "xgb_params":       XGB_PARAMS,
+                "n_cv_splits":      5,
+                "test_size":        0.15,
+                "training_start":   "1997-01",
+            },
+            reinit="finish_previous",
+        )
+
         y_reg = df_train[target_col]
         y_clf = df_train[f"dir_t{horizon}"]
         X     = df_train[FEATURE_COLS]
 
-        # Randomly sample 15% of the 25-year dataset to be the test holdout.
-        # This proves the model works in all market conditions (booms and busts).
         X_tv, X_test, y_tv, y_test = train_test_split(X, y_reg, test_size=0.15, random_state=42)
         _, _, y_tv_cl, y_test_dir = train_test_split(X, y_clf, test_size=0.15, random_state=42)
 
-        # Recency weights (Still works perfectly with shuffled data!)
         t = (X_tv.index - X_tv.index.min()).days.astype(float)
         weights_tv = 1.0 + 0.5 * (t / t.max())
 
-        # Walk-forward CV
         tscv = TimeSeriesSplit(n_splits=5, gap=1)
         cv_residuals = []
-
         for tr_idx, vl_idx in tscv.split(X_tv):
             X_tr, X_vl = X_tv.iloc[tr_idx], X_tv.iloc[vl_idx]
             y_tr, y_vl = y_tv.iloc[tr_idx], y_tv.iloc[vl_idx]
@@ -147,6 +160,18 @@ def train(feature_store: pd.DataFrame) -> dict:
         metadata[f"residual_std_t{horizon}"]  = float(mc_residuals.std())
 
         clf_acc = metadata.get(f"test_clf_acc_t{horizon}", 0)
+        wandb.log({
+            "horizon":          horizon,
+            "horizon_days":     horizon * 30,
+            "test_rmse":        metadata[f"test_rmse_t{horizon}"],
+            "test_mae":         metadata[f"test_mae_t{horizon}"],
+            "directional_acc":  metadata[f"test_dir_acc_t{horizon}"],
+            "clf_acc":          metadata[f"test_clf_acc_t{horizon}"],
+            "residual_std":     metadata[f"residual_std_t{horizon}"],
+            "residual_mean":    metadata[f"residual_mean_t{horizon}"],
+        })
+        wandb.finish()
+
         print(
             f"  t{horizon}: clf_dir_acc={clf_acc*100:.0f}% | "
             f"MC residual_std=${mc_residuals.std():.1f} (test) | "

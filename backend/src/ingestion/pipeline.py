@@ -87,9 +87,10 @@ def _fetch_eia_ng_spot() -> pd.Series | None:
     
 def _fetch_eia_ng_storage() -> pd.Series | None:
     """
-    Fetch US underground working gas storage (MMcf) from EIA API v2.
-    Uses the weekly storage endpoint, filtered to total US working gas (NUS).
-    EIA returns values in Bcf; we convert to MMcf (* 1000).
+    Fetch US Lower 48 underground working gas storage (BCF) from EIA API v2,
+    then merge with local XLS to get full history back to 1997.
+    Uses duoarea=R48 + process=SWO (total working gas).
+    EIA returns values in BCF; we convert to MMcf (* 1000) to match local file.
     Returns None on any failure.
     """
     if not _EIA_KEY:
@@ -101,11 +102,11 @@ def _fetch_eia_ng_storage() -> pd.Series | None:
                 "api_key":              _EIA_KEY,
                 "frequency":            "weekly",
                 "data[0]":              "value",
-                "facets[duoarea][]":    "NUS",
-                "facets[process][]":    "SAO",
+                "facets[duoarea][]":    "R48",
+                "facets[process][]":    "SWO",
                 "sort[0][column]":      "period",
                 "sort[0][direction]":   "desc",
-                "length":               2000,
+                "length":               1000,
             },
             timeout=30,
         )
@@ -119,17 +120,29 @@ def _fetch_eia_ng_storage() -> pd.Series | None:
         dates  = pd.to_datetime([row["period"] for row in valid_rows], errors="coerce")
         values = [float(row["value"]) * 1000 for row in valid_rows]
 
-        s = pd.Series(values, index=dates, name="storage_mmcf").dropna().sort_index()
-        # Some weekly endpoints have multiple rows per date (duplicates) — average them
-        s = s.groupby(s.index).mean()
-        # Resample weekly → monthly (last reading of each month)
-        s = s.resample("MS").last()
+        live = pd.Series(values, index=dates, name="storage_mmcf").dropna().sort_index()
+        # Deduplicate then resample weekly → monthly
+        live = live.groupby(live.index).mean()
+        live = live.resample("MS").last()
 
-        print(f"     [EIA] Storage fetched — latest: {s.index[-1].strftime('%Y-%m')} ({s.iloc[-1]:,.0f} MMcf)")
-        return s
+        # Load local XLS for full history back to 1997
+        local = load_ng_storage()
+        local = local.resample("MS").last()
+
+        # Merge: local provides backbone, live EIA overwrites recent months
+        combined = local.copy()
+        combined.update(live)
+        # Extend beyond local file's end date with live data
+        new_months = live[live.index > local.index.max()]
+        combined = pd.concat([combined, new_months]).sort_index()
+        combined.name = "storage_mmcf"
+
+        print(f"     [EIA] Storage merged — {combined.index[0].strftime('%Y-%m')} to {combined.index[-1].strftime('%Y-%m')} ({len(combined)} months)")
+        return combined
+
     except Exception as exc:
         print(f"     [EIA] Storage fetch failed ({exc}) — using local file.")
-        return None
+        return None    
 
 # ── Local file loaders (fallback) ─────────────────────────────────────────────
 
