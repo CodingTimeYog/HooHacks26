@@ -22,3 +22,12 @@ data/processed/
 .DS_Store
 Thumbs.db
 users.db
+
+.env
+logs/
+wandb/
+data/processed/*.parquet
+data/processed/cache.json
+foregast_dbt/target/
+foregast_dbt/dbt_packages/
+foregast_dbt/logs/
