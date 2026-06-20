@@ -258,11 +258,59 @@ def run_ingestion(start: str = "2018-01", end: str | None = None) -> dict:
         "storage_mmcf": stor.reindex(idx).rename("storage_mmcf"),
     }
 
-def load_full_history() -> dict:
-    """
-    Same as run_ingestion but returns all available history (no date clipping).
-    Used to build the historical chart payload.
-    """
+_MART_TABLE = "dev_marts.mart_commodity_panel_monthly"
+
+
+def _load_full_history_from_mart() -> dict:
+    """All-history NG/urea/DAP read from the mart, mirroring
+    engineer.build_features(source='mart'). Requires DATABASE_URL."""
+    from sqlalchemy import create_engine  # local import keeps pipeline.py import-time light
+
+    url = os.getenv("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL not set — required for mart-backed history.")
+    engine = create_engine(url, future=True)
+    df = pd.read_sql(
+        f"SELECT month, ng_spot, urea, dap FROM {_MART_TABLE} ORDER BY month",
+        engine,
+    )
+    df["month"] = pd.to_datetime(df["month"])
+    df = df.set_index("month").sort_index()
+    for c in ("ng_spot", "urea", "dap"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return {
+        "ng_spot": df["ng_spot"].rename("ng_spot"),
+        "urea":    df["urea"].rename("urea"),
+        "dap":     df["dap"].rename("dap"),
+    }
+
+
+def _load_full_history_from_local() -> dict:
+    """Legacy local-file path — kept as the fallback when DATABASE_URL is unset."""
     ng   = load_ng_monthly()
     fert = load_fertilizer_prices()
     return {"ng_spot": ng, "urea": fert["urea"], "dap": fert["dap"]}
+
+
+def load_full_history(source: str = "auto") -> dict:
+    """
+    All-history NG/urea/DAP for the chart payload.
+
+    Mirrors the source='mart'/'pipeline' pattern in engineer.build_features:
+      - 'auto' (default) : mart when DATABASE_URL is set, else local files.
+      - 'mart'           : dev_marts.mart_commodity_panel_monthly; errors if env unset.
+      - 'local'          : legacy CSV/XLSX path.
+    """
+    if source == "mart":
+        return _load_full_history_from_mart()
+    if source == "local":
+        return _load_full_history_from_local()
+    if source != "auto":
+        raise ValueError(f"Unknown source={source!r}. Use 'auto', 'mart', or 'local'.")
+
+    if os.getenv("DATABASE_URL", "").strip():
+        try:
+            return _load_full_history_from_mart()
+        except Exception as exc:
+            print(f"     [history] Mart load failed ({exc}) — falling back to local files.")
+    return _load_full_history_from_local()
