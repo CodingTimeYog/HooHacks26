@@ -12,3 +12,10 @@ backend/agrisignal.db-shm
 backend/agrisignal.db-wal
 .vscode/
 docs/
+
+# Added for Dockerfile.api (lean read-only cache consumer — cache is mounted)
+wandb/
+logs/
+foregast_dbt/
+data/
+**/__pycache__
