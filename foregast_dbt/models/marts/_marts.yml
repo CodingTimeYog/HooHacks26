@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: mart_commodity_panel_monthly
+    description: >
+      Monthly commodity panel — exact shape that backend.src.ingestion.pipeline.run_ingestion()
+      returns. One row per month; price columns are nullable on purpose (NG only goes back
+      to 1997, storage to 1973, and urea/DAP end with the Pink Sheet at 2025-12, while NG
+      can extend into the current calendar year).
+    columns:
+      - name: month
+        description: "Month-start date. Union of months present in any staging model."
+        tests:
+          - not_null
+          - unique
+      - name: ng_spot
+        description: "Henry Hub spot, USD per MMBtu. NULL for months before 1997-01."
+      - name: urea
+        description: "Urea price, USD per metric ton. NULL after the Pink Sheet's last month (currently 2025-12)."
+      - name: dap
+        description: "DAP price, USD per metric ton. NULL where the Pink Sheet has no value (early history and after the last published month)."
+      - name: storage_mmcf
+        description: "US Lower-48 underground working gas, MMcf. NULL for months before 1973-12."

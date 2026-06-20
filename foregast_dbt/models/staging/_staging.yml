@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: stg_henry_hub
+    description: "Henry Hub spot price, monthly. EIA daily-mean takes precedence over the local CSV backbone on overlapping months and extends beyond it."
+    columns:
+      - name: month
+        description: "Month-start date."
+        tests:
+          - not_null
+          - unique
+      - name: price_usd_per_mmbtu
+        description: "Spot price, USD per MMBtu."
+        tests:
+          - not_null
+
+  - name: stg_ng_storage
+    description: "US Lower-48 working gas storage, monthly (MMcf). EIA weekly last-in-month takes precedence over the local XLS backbone on overlapping months."
+    columns:
+      - name: month
+        description: "Month-start date."
+        tests:
+          - not_null
+          - unique
+      - name: storage_mmcf
+        description: "Underground working gas, millions of cubic feet."
+        tests:
+          - not_null
+
+  - name: stg_urea
+    description: "World Bank Pink Sheet urea price, monthly ($/mt)."
+    columns:
+      - name: month
+        description: "Month-start date."
+        tests:
+          - not_null
+          - unique
+      - name: price_usd_per_mt
+        description: "Urea spot price, USD per metric ton."
+        tests:
+          - not_null
+
+  - name: stg_dap
+    description: "World Bank Pink Sheet DAP price, monthly ($/mt)."
+    columns:
+      - name: month
+        description: "Month-start date."
+        tests:
+          - not_null
+          - unique
+      - name: price_usd_per_mt
+        description: "DAP spot price, USD per metric ton."
+        tests:
+          - not_null

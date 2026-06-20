@@ -7,10 +7,19 @@ Targets use negative shifts (look-forward) and are never used as input features.
 import os
 import pandas as pd
 import numpy as np
+from sqlalchemy import create_engine
+from dotenv import load_dotenv
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 ROOT  = os.path.normpath(os.path.join(_THIS, "..", "..", ".."))
 DATA  = os.path.join(ROOT, "data")
+
+load_dotenv(os.path.join(ROOT, ".env"))
+
+# TODO: make schema/table env-configurable (e.g. MART_TABLE env var defaulting
+# to this) once we have prod/staging envs. Hardcoded to dev_marts for now.
+MART_TABLE  = "dev_marts.mart_commodity_panel_monthly"
+_PANEL_COLS = ["ng_spot", "urea", "dap", "storage_mmcf"]
 
 FEATURE_COLS = [
     # Raw + lags
@@ -44,6 +53,49 @@ FEATURE_COLS = [
 ]
 
 TARGET_COLS = ["target_urea_t1", "target_urea_t2", "target_urea_t3"]
+
+
+def _load_panel_from_mart(start: str = "1997-01", end: str | None = None) -> dict:
+    """
+    Read the four monthly series from dev_marts.mart_commodity_panel_monthly
+    and return the same dict-of-Series shape that run_ingestion() returns.
+
+    Reindexes to a contiguous MS range so callers see no gaps. When end is None,
+    extends to the latest month that has ANY non-null value in the mart (which
+    today is 2026-06 via NG — urea/DAP are NaN past 2025-12). This differs from
+    run_ingestion's end=None semantics (min of latest-non-null across ALL four
+    series, which clips to the shortest = 2025-12). Trailing NG-only rows are
+    prediction-time rows; training drops them via NaN-target filtering.
+    """
+    url = os.getenv("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL not set — required for source='mart'. "
+            "Set it in .env or call build_features(source='pipeline')."
+        )
+    engine = create_engine(url, future=True)
+    df = pd.read_sql(
+        f"SELECT month, ng_spot, urea, dap, storage_mmcf "
+        f"FROM {MART_TABLE} ORDER BY month",
+        engine,
+    )
+    df["month"] = pd.to_datetime(df["month"])
+    df = df.set_index("month").sort_index()
+    for c in _PANEL_COLS:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    end_ts = pd.Timestamp(end) if end is not None else df.dropna(how="all").index.max()
+    idx = pd.date_range(start=pd.Timestamp(start), end=end_ts, freq="MS")
+    df = df.reindex(idx)
+    return {c: df[c].rename(c) for c in _PANEL_COLS}
+
+
+def _load_panel_from_pipeline(start: str = "1997-01", end: str | None = None) -> dict:
+    """Selectable fallback — kept so we can flip back to the original pandas
+    pipeline by passing source='pipeline'. Imported lazily so the default mart
+    path doesn't pay pipeline.py's import-time costs."""
+    from src.ingestion.pipeline import run_ingestion
+    return run_ingestion(start=start, end=end)
 
 
 def _load_daily_ng_features() -> pd.DataFrame:
@@ -85,12 +137,39 @@ def _load_daily_ng_features() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def build_features(data: dict) -> pd.DataFrame:
+def build_features(
+    data: dict | None = None,
+    *,
+    source: str = "mart",
+    start: str = "1997-01",
+    end: str | None = None,
+) -> pd.DataFrame:
     """
-    Takes dict from run_ingestion(), returns wide feature-store DataFrame.
+    Build the wide feature-store DataFrame.
+
+    Sources for the four monthly series (ng_spot, urea, dap, storage_mmcf):
+      - data=<dict>                    : use the supplied dict as-is (legacy
+                                         path — train_models.py still passes
+                                         run_ingestion's output this way).
+      - data=None, source='mart'       : read dev_marts.mart_commodity_panel_monthly
+                                         via DATABASE_URL (default).
+      - data=None, source='pipeline'   : fall back to run_ingestion() (kept
+                                         selectable so we can flip back).
+
+    Daily-derived MA features still come from the local Henry Hub XLS via
+    _load_daily_ng_features — that path is untouched.
+
     Rows with all-NaN targets (last 3 rows) are kept — they are used for
     out-of-sample prediction; drop them only during model training.
     """
+    if data is None:
+        if source == "mart":
+            data = _load_panel_from_mart(start=start, end=end)
+        elif source == "pipeline":
+            data = _load_panel_from_pipeline(start=start, end=end)
+        else:
+            raise ValueError(f"Unknown source={source!r}. Use 'mart' or 'pipeline'.")
+
     df = pd.DataFrame(data)
 
     # ── Nat gas lags (1–6 monthly + 9 and 12 for seasonality)

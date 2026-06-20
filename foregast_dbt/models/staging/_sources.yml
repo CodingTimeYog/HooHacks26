@@ -1,0 +1,61 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Native-grain landed sources from backend/src/ingestion/postgres_loader.py.
+      Each table is rewritten in full on every loader run.
+    tables:
+      - name: eia_ng_spot_daily
+        description: "Henry Hub spot ($/MMBtu), daily, from EIA API v2 (series RNGWHHD)."
+        columns:
+          - name: period
+            description: "Trade date."
+            tests: [not_null]
+          - name: value_usd_per_mmbtu
+            description: "Spot price in USD/MMBtu."
+            tests: [not_null]
+
+      - name: eia_ng_storage_weekly
+        description: "US Lower-48 working gas storage (BCF), weekly, from EIA API v2 (duoarea=R48, process=SWO)."
+        columns:
+          - name: period
+            description: "Week-ending date."
+            tests: [not_null]
+          - name: value_bcf
+            description: "Working gas in billions of cubic feet."
+            tests: [not_null]
+
+      - name: henry_hub_spot_monthly_csv
+        description: "Henry Hub spot price ($/MMBtu), monthly. Backbone from local CSV (1997+)."
+        columns:
+          - name: period
+            description: "Month-start date."
+            tests: [not_null]
+          - name: price_usd_per_mmbtu
+            description: "Spot price in USD/MMBtu."
+            tests: [not_null]
+
+      - name: eia_ng_storage_monthly_xls
+        description: "EIA underground working gas storage (MMcf), monthly. Backbone from local XLS (1973+)."
+        columns:
+          - name: period
+            description: "Month-start date."
+            tests: [not_null]
+          - name: working_gas_mmcf
+            description: "Working gas in MMcf."
+            tests: [not_null]
+
+      - name: worldbank_pinksheet_monthly
+        description: >
+          World Bank Pink Sheet monthly commodity prices. Feeds both stg_urea and stg_dap
+          (one source table, two staging models — one per commodity column).
+        columns:
+          - name: period
+            description: "Month-start date."
+            tests: [not_null]
+          - name: urea_usd_per_mt
+            description: "Urea spot price, USD per metric ton."
+          - name: dap_usd_per_mt
+            description: "DAP spot price, USD per metric ton."
