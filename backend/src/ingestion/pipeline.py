@@ -26,9 +26,40 @@ DATA   = os.path.join(ROOT, "data")
 load_dotenv(os.path.join(ROOT, ".env"))
 
 _EIA_KEY = os.getenv("EIA_API_KEY", "")
+_EIA_PAGE_SIZE = 5000
 
 
 # ── EIA API helpers ────────────────────────────────────────────────────────────
+
+def _eia_paginated(url: str, params: dict) -> list[dict]:
+    """Pull all pages from an EIA v2 endpoint, ascending by period.
+
+    Mirrors the helper in raw_sources.py — without pagination we cap at one page
+    (~5000 daily rows = ~2006→today for NG spot) and silently drop earlier
+    history, which is what caused the pre-2006 parity diffs against the mart.
+    """
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page_params = {
+            **params,
+            "api_key":            _EIA_KEY,
+            "length":             _EIA_PAGE_SIZE,
+            "offset":             offset,
+            "sort[0][column]":    "period",
+            "sort[0][direction]": "asc",
+        }
+        r = requests.get(url, params=page_params, timeout=60)
+        r.raise_for_status()
+        page = r.json()["response"]["data"]
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _EIA_PAGE_SIZE:
+            break
+        offset += _EIA_PAGE_SIZE
+    return rows
+
 
 def _fetch_eia_ng_spot() -> pd.Series | None:
     """
@@ -40,21 +71,10 @@ def _fetch_eia_ng_spot() -> pd.Series | None:
     if not _EIA_KEY:
         return None
     try:
-        r = requests.get(
+        rows = _eia_paginated(
             "https://api.eia.gov/v2/natural-gas/pri/fut/data/",
-            params={
-                "api_key":              _EIA_KEY,
-                "frequency":            "daily",
-                "data[0]":              "value",
-                "facets[series][]":     "RNGWHHD",
-                "sort[0][column]":      "period",
-                "sort[0][direction]":   "desc",
-                "length":               5000,
-            },
-            timeout=30,
+            {"frequency": "daily", "data[0]": "value", "facets[series][]": "RNGWHHD"},
         )
-        r.raise_for_status()
-        rows = r.json()["response"]["data"]
         valid_rows = [row for row in rows if row.get("value") is not None and row.get("period")]
         if not valid_rows:
             print("     [EIA] NG spot — empty response, using local file.")
@@ -96,22 +116,15 @@ def _fetch_eia_ng_storage() -> pd.Series | None:
     if not _EIA_KEY:
         return None
     try:
-        r = requests.get(
+        rows = _eia_paginated(
             "https://api.eia.gov/v2/natural-gas/stor/wkly/data/",
-            params={
-                "api_key":              _EIA_KEY,
-                "frequency":            "weekly",
-                "data[0]":              "value",
-                "facets[duoarea][]":    "R48",
-                "facets[process][]":    "SWO",
-                "sort[0][column]":      "period",
-                "sort[0][direction]":   "desc",
-                "length":               1000,
+            {
+                "frequency":         "weekly",
+                "data[0]":           "value",
+                "facets[duoarea][]": "R48",
+                "facets[process][]": "SWO",
             },
-            timeout=30,
         )
-        r.raise_for_status()
-        rows = r.json()["response"]["data"]
         valid_rows = [row for row in rows if row.get("value") is not None and row.get("period")]
         if not valid_rows:
             print("     [EIA] Storage — empty response, using local file.")
