@@ -11,7 +11,7 @@ Usage (from project root):
 import sys
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
@@ -93,7 +93,7 @@ common_idx = common_idx[common_idx >= "2018-01-01"]
 
 # ── Assemble cache
 cache = {
-    "generated_at": datetime.utcnow().isoformat() + "Z",
+    "generated_at": datetime.now(timezone.utc).isoformat(),
     "as_of_date":   as_of_date.strftime("%Y-%m"),
 
     # GET /api/prices/history?commodity=urea
@@ -132,8 +132,8 @@ cache = {
 
 out_path = os.path.join(ROOT, "data", "processed", "cache.json")
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
-with open(out_path, "w") as f:
-    json.dump(cache, f, indent=2)
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(cache, f, indent=2, ensure_ascii=False)
 
 print(f"\nCache written -> {out_path}")
 print("=== Done. Fresh data is live — no server restart needed. ===")
