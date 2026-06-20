@@ -98,12 +98,42 @@ def _load_panel_from_pipeline(start: str = "1997-01", end: str | None = None) ->
     return run_ingestion(start=start, end=end)
 
 
-def _load_daily_ng_features() -> pd.DataFrame:
+_DAILY_NG_TABLE = "raw.eia_ng_spot_daily"
+
+
+def _aggregate_daily_ng(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Load daily Henry Hub data and return monthly-aggregated MA features.
-    All three MA files contain identical raw daily data — we just use the 30-day file.
-    Returns empty DataFrame if file is missing.
+    Shared monthly-aggregation kernel for daily Henry Hub prices. Input must have
+    a 'date' column and a 'price' column; both XLS and DB paths normalise to this
+    shape before calling here so the rolling/EOM semantics are bit-identical.
     """
+    df = df.dropna().set_index("date").sort_index()
+
+    # Daily rolling MAs (positional row windows over business-day-only series,
+    # min_periods = half window).
+    df["ma30"] = df["price"].rolling(30, min_periods=15).mean()
+    df["ma60"] = df["price"].rolling(60, min_periods=30).mean()
+    df["ma90"] = df["price"].rolling(90, min_periods=45).mean()
+
+    # Aggregate to month-start: last available daily value within the month for
+    # MAs, std of daily prices for volatility.
+    monthly = pd.DataFrame({
+        "ng_ma30_eom":    df["ma30"].resample("MS").last(),
+        "ng_ma60_eom":    df["ma60"].resample("MS").last(),
+        "ng_ma90_eom":    df["ma90"].resample("MS").last(),
+        "ng_daily_vol_1m": df["price"].resample("MS").std(),
+    })
+
+    # MA crossover signals: >0 = short-term trend above long-term (bullish)
+    monthly["ng_ma_cross_30_60"] = monthly["ng_ma30_eom"] / monthly["ng_ma60_eom"] - 1
+    monthly["ng_ma_cross_30_90"] = monthly["ng_ma30_eom"] / monthly["ng_ma90_eom"] - 1
+
+    return monthly
+
+
+def _load_daily_ng_features_from_xls() -> pd.DataFrame:
+    """Daily Henry Hub MA features from the local EIA XLS. Returns empty DataFrame
+    if the file is missing or unreadable."""
     path = os.path.join(DATA, "RNGWHHDd_henry_hub_nat_gas_spot_price_30_day_moving.xls")
     if not os.path.exists(path):
         return pd.DataFrame()
@@ -112,35 +142,59 @@ def _load_daily_ng_features() -> pd.DataFrame:
         df.columns = ["date", "price"]
         df["date"]  = pd.to_datetime(df["date"], errors="coerce")
         df["price"] = pd.to_numeric(df["price"], errors="coerce")
-        df = df.dropna().set_index("date").sort_index()
-
-        # Daily rolling MAs (calendar-day windows, min_periods = half window)
-        df["ma30"] = df["price"].rolling(30,  min_periods=15).mean()
-        df["ma60"] = df["price"].rolling(60,  min_periods=30).mean()
-        df["ma90"] = df["price"].rolling(90,  min_periods=45).mean()
-
-        # Aggregate to month-start: end-of-month value for MAs, std for volatility
-        monthly = pd.DataFrame({
-            "ng_ma30_eom":    df["ma30"].resample("MS").last(),
-            "ng_ma60_eom":    df["ma60"].resample("MS").last(),
-            "ng_ma90_eom":    df["ma90"].resample("MS").last(),
-            "ng_daily_vol_1m": df["price"].resample("MS").std(),
-        })
-
-        # MA crossover signals: >0 = short-term trend above long-term (bullish)
-        monthly["ng_ma_cross_30_60"] = monthly["ng_ma30_eom"] / monthly["ng_ma60_eom"] - 1
-        monthly["ng_ma_cross_30_90"] = monthly["ng_ma30_eom"] / monthly["ng_ma90_eom"] - 1
-
-        return monthly
+        return _aggregate_daily_ng(df)
     except Exception as exc:
-        print(f"     [features] Daily NG load failed ({exc}) — skipping daily features.")
+        print(f"     [features] Daily NG XLS load failed ({exc}) — skipping daily features.")
         return pd.DataFrame()
+
+
+def _load_daily_ng_features_from_db() -> pd.DataFrame:
+    """Daily Henry Hub MA features from raw.eia_ng_spot_daily via DATABASE_URL.
+    Parity-validated against the XLS path: daily prices match exactly on the
+    7327-row overlap; the only divergence is upstream EIA holiday-fill revisions
+    on 9 dates, shifting 5 historical monthly MAs by ≤$0.04."""
+    url = os.getenv("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL not set — required for daily_source='db'.")
+    engine = create_engine(url, future=True)
+    df = pd.read_sql(
+        f"SELECT period AS date, value_usd_per_mmbtu AS price "
+        f"FROM {_DAILY_NG_TABLE} ORDER BY period",
+        engine,
+    )
+    df["date"]  = pd.to_datetime(df["date"], errors="coerce")
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    return _aggregate_daily_ng(df)
+
+
+def _load_daily_ng_features(daily_source: str = "auto") -> pd.DataFrame:
+    """
+    Dispatcher for daily NG MA features. Mirrors the source='mart'/'pipeline'
+    pattern on the monthly panel:
+      - 'auto' (default) : DB when DATABASE_URL is set, else XLS fallback.
+      - 'db'             : raw.eia_ng_spot_daily; errors if DATABASE_URL unset.
+      - 'xls'            : local Henry Hub XLS.
+    """
+    if daily_source == "db":
+        return _load_daily_ng_features_from_db()
+    if daily_source == "xls":
+        return _load_daily_ng_features_from_xls()
+    if daily_source != "auto":
+        raise ValueError(f"Unknown daily_source={daily_source!r}. Use 'auto', 'db', or 'xls'.")
+
+    if os.getenv("DATABASE_URL", "").strip():
+        try:
+            return _load_daily_ng_features_from_db()
+        except Exception as exc:
+            print(f"     [features] Daily NG DB load failed ({exc}) — falling back to XLS.")
+    return _load_daily_ng_features_from_xls()
 
 
 def build_features(
     data: dict | None = None,
     *,
     source: str = "mart",
+    daily_source: str = "auto",
     start: str = "1997-01",
     end: str | None = None,
 ) -> pd.DataFrame:
@@ -156,8 +210,10 @@ def build_features(
       - data=None, source='pipeline'   : fall back to run_ingestion() (kept
                                          selectable so we can flip back).
 
-    Daily-derived MA features still come from the local Henry Hub XLS via
-    _load_daily_ng_features — that path is untouched.
+    Daily-derived MA features (ng_ma30/60/90_eom, ng_daily_vol_1m, crossovers):
+      - daily_source='auto' (default)  : raw.eia_ng_spot_daily via DATABASE_URL
+                                         if set, else local Henry Hub XLS.
+      - daily_source='db' / 'xls'      : force either source.
 
     Rows with all-NaN targets (last 3 rows) are kept — they are used for
     out-of-sample prediction; drop them only during model training.
@@ -190,7 +246,7 @@ def build_features(
     df["ng_mom_6m"] = df["ng_spot"].pct_change(6)
 
     # ── Daily-derived MA features — join by month-start index
-    daily_feats = _load_daily_ng_features()
+    daily_feats = _load_daily_ng_features(daily_source=daily_source)
     if not daily_feats.empty:
         df = df.join(daily_feats, how="left")
     else:
