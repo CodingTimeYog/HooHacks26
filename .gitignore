@@ -31,3 +31,9 @@ data/processed/cache.json
 foregast_dbt/target/
 foregast_dbt/dbt_packages/
 foregast_dbt/logs/
+# databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
