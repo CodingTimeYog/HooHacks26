@@ -8,7 +8,6 @@ log = logging.getLogger(__name__)
 
 STEPS = [
     ("Training price models",      [sys.executable, "backend/train_models.py"]),
-    ("Training farm risk model",   [sys.executable, "backend/training_and_eval.py"]),
     ("Running forecast pipeline",  [sys.executable, "backend/run_pipeline.py"]),
 ]
 

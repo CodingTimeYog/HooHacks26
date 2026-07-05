@@ -1,4 +1,0 @@
-email,crop,acreage,pre_purchased_pct,subscribed_at,is_active
-test1@example.com,corn,500,0.0,2026-03-21T16:01:06.774212,True
-test2@example.com,wheat,300,0.2,2026-03-21T16:01:06.778037,False
-test3@example.com,soybeans,200,0.15,2026-03-21T16:01:06.779044,True

@@ -97,7 +97,7 @@ Legend: `[NEW]` = added by the migration. `[PRE]` = pre-existing, unchanged.
                        app.py + pages/* (Streamlit UI)    [PRE]
 ```
 
-`refresh.py` chains `train_models.py` → `training_and_eval.py` → `run_pipeline.py`; `scheduler.py` (APScheduler) fires `refresh.run_refresh()` once on start and then daily at 06:00 UTC.
+`refresh.py` chains `train_models.py` → `run_pipeline.py`; `scheduler.py` (APScheduler) fires `refresh.run_refresh()` once on start and then daily at 06:00 UTC.
 
 ## 2. What changed vs before
 
