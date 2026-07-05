@@ -1,0 +1,8 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["foregast_dbt"]
+
+[tool.ruff.lint]
+# Default rule set (pycodestyle errors + pyflakes); loosen or extend deliberately.
+select = ["E4", "E7", "E9", "F"]

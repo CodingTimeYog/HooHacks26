@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev tools
+        run: pip install -r requirements-dev.txt
+      - name: Ruff (report only, no auto-fix)
+        run: ruff check .
+
+  dbt-check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: foregast
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d foregast"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dbt
+        run: pip install "dbt-postgres>=1.10,<2.0"
+      # No packages.yml in foregast_dbt, so `dbt deps` is not applicable.
+      # `dbt parse` validates model SQL / refs / sources without needing data.
+      # profiles.yml defaults (localhost / devpass) match the service container.
+      - name: dbt parse
+        run: dbt parse --project-dir foregast_dbt --profiles-dir foregast_dbt
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app image (Dockerfile)
+        run: docker build -f Dockerfile -t foregast-app .
+      - name: Build API image (Dockerfile.api)
+        run: docker build -f Dockerfile.api -t foregast-api .
+
+  # TODO: enable once pytest suite lands.
+  # tests:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.12"
+  #     - run: pip install -r requirements.txt -r requirements-dev.txt
+  #     - run: pytest
