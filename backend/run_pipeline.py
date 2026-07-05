@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 _THIS = os.path.dirname(os.path.abspath(__file__))
 ROOT  = os.path.normpath(os.path.join(_THIS, ".."))
 
-from src.ingestion.pipeline import run_ingestion, load_full_history
-from src.features.engineer import build_features, load_feature_store, FEATURE_COLS
+from src.ingestion.pipeline import load_full_history
+from src.features.engineer import load_feature_store, FEATURE_COLS
 from src.models.forecaster import load_models, predict
 from src.simulation.monte_carlo import run_monte_carlo
 from src.signals.engine import generate_signal

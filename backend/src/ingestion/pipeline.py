@@ -14,7 +14,6 @@ live source exists for those commodities.
 import os
 import requests
 import pandas as pd
-import numpy as np
 from dotenv import load_dotenv
 
 # Resolve paths relative to this file regardless of cwd

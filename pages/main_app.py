@@ -1,7 +1,6 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import colorsys
 import os
@@ -205,8 +204,8 @@ def _hex_to_hls(hex_color: str):
     return colorsys.rgb_to_hls(r, g, b)
 
 
-def _hls_to_hex(h, l, s) -> str:
-    r, g, b = colorsys.hls_to_rgb(h, l, s)
+def _hls_to_hex(h, lightness, s) -> str:
+    r, g, b = colorsys.hls_to_rgb(h, lightness, s)
     return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
 
 
@@ -234,8 +233,8 @@ def get_crop_colors_for_df(df: pd.DataFrame, season_base: dict) -> list:
         base = season_base.get(season, "#888888")
         hue, _, sat = _hex_to_hls(base)
         shades = [
-            _hls_to_hex(hue, l, min(sat * s_scale, 1.0))
-            for l, s_scale in (_SHADE_PATTERN * ((n // len(_SHADE_PATTERN)) + 1))[:n]
+            _hls_to_hex(hue, lightness, min(sat * s_scale, 1.0))
+            for lightness, s_scale in (_SHADE_PATTERN * ((n // len(_SHADE_PATTERN)) + 1))[:n]
         ]
         season_shades[season] = {"shades": shades, "idx": 0}
 
@@ -343,22 +342,22 @@ _banner_bg_css = (
     else "linear-gradient(135deg,#14532d 0%,#166534 55%,#15803d 100%)"
 )
 
-st.markdown(f"""
+st.markdown("""
 <style>
-    [data-testid='stSidebarNav'] {{ display: none; }}
-    [data-testid='collapsedControl'] {{ display: none; }}
-    section[data-testid='stSidebar'] {{ display: none; }}
-    header[data-testid='stHeader'] {{ display: none; }}
-    [data-testid='stToolbar'] {{ display: none; }}
-    #MainMenu {{ display: none; }}
-    body, .stApp {{ background-color: #ffffff; }}
-    h1, h2, h3 {{ color: #1a5c2a; font-family: system-ui, sans-serif; }}
+    [data-testid='stSidebarNav'] { display: none; }
+    [data-testid='collapsedControl'] { display: none; }
+    section[data-testid='stSidebar'] { display: none; }
+    header[data-testid='stHeader'] { display: none; }
+    [data-testid='stToolbar'] { display: none; }
+    #MainMenu { display: none; }
+    body, .stApp { background-color: #ffffff; }
+    h1, h2, h3 { color: #1a5c2a; font-family: system-ui, sans-serif; }
 
     /* shrink top padding so content starts higher */
-    .block-container {{ padding-top: 0.5rem !important; }}
+    .block-container { padding-top: 0.5rem !important; }
 
     /* Sticky header row — first direct child of the top-level vertical block */
-    section[data-testid="stMain"] > div > div[data-testid="stVerticalBlock"] > div:first-child {{
+    section[data-testid="stMain"] > div > div[data-testid="stVerticalBlock"] > div:first-child {
         position: sticky;
         top: 0;
         z-index: 999;
@@ -368,53 +367,53 @@ st.markdown(f"""
         width: 100vw;
         left: 0;
         margin-left: -1rem;
-    }}
+    }
 
     /* Keep "Logged in as …" on one line */
-    .user-email-bar {{
+    .user-email-bar {
         display: flex;
         align-items: center;
         gap: 0.6rem;
         text-align: right;
         font-size: 0.95rem;
         color: #444;
-    }}
+    }
     
-    .user-email-bar img {{
+    .user-email-bar img {
         width: 24px;
         height: 24px;
-    }}
+    }
 
     /* Prevent button labels from wrapping */
-    .stButton button, button[data-testid^="stBaseButton"] {{
+    .stButton button, button[data-testid^="stBaseButton"] {
         white-space: nowrap !important;
-    }}
+    }
 
 
-    .metric-icon {{
+    .metric-icon {
         width: 48px;
         height: 48px;
         margin: 0 auto 0.8rem;
         display: block;
-    }}
+    }
 
-    .advice-card {{
+    .advice-card {
         background: #f9fbf9;
         border-left: 4px solid #1a5c2a;
         border-radius: 0px;
         padding: 2rem 1.8rem;
         margin-top: 1.5rem;
-    }}
+    }
 
-    .risk-medium {{ color: #e67e22; font-weight: 600; }}
-    .risk-low    {{ color: #27ae60; font-weight: 600; }}
-    .risk-high   {{ color: #e74c3c; font-weight: 600; }}
+    .risk-medium { color: #e67e22; font-weight: 600; }
+    .risk-low    { color: #27ae60; font-weight: 600; }
+    .risk-high   { color: #e74c3c; font-weight: 600; }
 
     /* make tab labels bigger */
-    button[data-baseweb="tab"] {{ font-size: 1.05rem !important; }}
+    button[data-baseweb="tab"] { font-size: 1.05rem !important; }
 
     /* ── Banner ── */
-    .agri-banner {{
+    .agri-banner {
         background: linear-gradient(135deg, #14532d 0%, #166534 55%, #15803d 100%);
         padding: 18px 28px;
         margin-bottom: 0.5rem;
@@ -422,30 +421,29 @@ st.markdown(f"""
         margin-left: -28px;
         margin-right: -28px;
         width: calc(100% + 56px);
-    }}
-    }}
-    .agri-banner h1 {{
+    }
+    .agri-banner h1 {
         color: #bbf7d0;
         font-size: 1.6rem;
         font-weight: 800;
         margin: 0 0 4px 0;
         letter-spacing: -0.3px;
-    }}
-    .agri-banner p {{
+    }
+    .agri-banner p {
         color: #bbf7d0;
         font-size: 0.82rem;
         margin: 0;
         opacity: 0.9;
-    }}
+    }
 
     /* ── Full-height columns ── */
-    [data-testid="stHorizontalBlock"] {{ align-items: stretch !important; }}
+    [data-testid="stHorizontalBlock"] { align-items: stretch !important; }
 
     /* ── Center Add button text ── */
-    [data-testid="stFormSubmitButton"] button p {{
+    [data-testid="stFormSubmitButton"] button p {
         width: 100%;
         text-align: center !important;
-    }}
+    }
 
 </style>
 """, unsafe_allow_html=True)
@@ -484,7 +482,7 @@ with col_signout:
 # ── Banner ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="agri-banner">
-  <h1 style="color:#bbf7d0;">🌾 foreGASt</h1>
+  <h1>🌾 foreGASt</h1>
   <p>Fertilizer intelligence for American farmers. Real prices, real risk, real decisions.</p>
 </div>
 """, unsafe_allow_html=True)
@@ -1490,16 +1488,25 @@ ended up *below* today's price. Above 50% means waiting is more likely to save m
             prob_str       = "&nbsp;" if is_baseline else f"Prob cheaper than now:  {prob_save_pct:.0f}%"
 
             if is_baseline:
-                border = "#2563eb"; bg = "rgba(37,99,235,0.07)"; b_col = "#2563eb"; badge = "BASELINE"
+                border = "#2563eb"
+                bg = "rgba(37,99,235,0.07)"
+                b_col = "#2563eb"
+                badge = "BASELINE"
             elif p50 < cur:
-                border = "#16a34a"; bg = "rgba(22,163,74,0.07)"; b_col = "#16a34a"
+                border = "#16a34a"
+                bg = "rgba(22,163,74,0.07)"
+                b_col = "#16a34a"
                 badge  = f"SAVE {abs(delta_pct):.1f}%"
             else:
                 pct_up = s["prob_rising"] * 100
                 if pct_up < 70:
-                    border = "#f59e0b"; bg = "rgba(245,158,11,0.07)"; b_col = "#f59e0b"
+                    border = "#f59e0b"
+                    bg = "rgba(245,158,11,0.07)"
+                    b_col = "#f59e0b"
                 else:
-                    border = "#ef4444"; bg = "rgba(239,68,68,0.07)";  b_col = "#ef4444"
+                    border = "#ef4444"
+                    bg = "rgba(239,68,68,0.07)"
+                    b_col = "#ef4444"
                 badge = f"{pct_up:.0f}% CHANCE HIGHER"
 
             delta_col = "#64748b" if is_baseline else ("#16a34a" if delta <= 0 else "#ef4444")
@@ -1699,7 +1706,8 @@ particular price move.
         table_df["current_cost_m"]   = table_df["current_cost_m"].apply(lambda x: f"${x:.1f}M")
         table_df["forecast_cost_m"]  = table_df["forecast_cost_m"].apply(lambda x: f"${x:.1f}M")
         table_df["impact_m"]         = table_df["impact_m"].apply(lambda x: f"{chg_sign}${abs(x):.1f}M")
-        _fmt_acres = lambda x: f"{x/1e6:.1f}M ac" if x >= 1e6 else f"{x/1e3:.0f}K ac"
+        def _fmt_acres(x):
+            return f"{x/1e6:.1f}M ac" if x >= 1e6 else f"{x/1e3:.0f}K ac"
         for col in ("corn_acres", "wheat_acres", "soy_acres"):
             table_df[col] = table_df[col].apply(_fmt_acres)
         table_df.columns = [

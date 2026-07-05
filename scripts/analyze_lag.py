@@ -62,10 +62,10 @@ for lag in range(0, 13):
 
 peak_lag = max(correlations, key=lambda k: correlations[k])
 print(f"\n  >>> Peak correlation at lag {peak_lag} months  (r = {correlations[peak_lag]:+.4f})")
-print(f"      Current features cover lags 1–4.")
+print("      Current features cover lags 1–4.")
 
 if peak_lag <= 4:
-    print(f"      RESULT: Feature lags 1–4 adequately capture the peak.")
+    print("      RESULT: Feature lags 1–4 adequately capture the peak.")
 else:
     print(f"      RESULT: Peak lag {peak_lag} is outside current feature window.")
     print(f"              Recommend adding ng_lag5 through ng_lag{peak_lag}.")
@@ -102,7 +102,7 @@ try:
         if max_sig > 4:
             print(f"      Recommend extending features to ng_lag{max_sig}.")
         else:
-            print(f"      Current feature lags (1–4) cover the significant range.")
+            print("      Current feature lags (1–4) cover the significant range.")
     else:
         print("      No significant Granger causality found (unusual — check data).")
 except Exception as e:
@@ -143,8 +143,8 @@ print(f"\n{'=' * 60}")
 print("SUMMARY")
 print(f"{'=' * 60}")
 print(f"  Peak CCF lag         : {peak_lag} months")
-print(f"  Current feature lags : 1–4 months")
+print("  Current feature lags : 1–4 months")
 if peak_lag > 4:
     print(f"  ACTION NEEDED        : Add ng_lag5 through ng_lag{peak_lag} to engineer.py")
 else:
-    print(f"  ACTION NEEDED        : None — current lags cover peak")
+    print("  ACTION NEEDED        : None — current lags cover peak")

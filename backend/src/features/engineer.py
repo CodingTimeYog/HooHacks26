@@ -6,7 +6,6 @@ Targets use negative shifts (look-forward) and are never used as input features.
 
 import os
 import pandas as pd
-import numpy as np
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 

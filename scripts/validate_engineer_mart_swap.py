@@ -143,11 +143,11 @@ def main() -> int:
         summary.append((col, n_mismatch, max_diff, first, last, tag))
 
     print(f"  {'column':<28} {'#diffs':>7} {'max|diff|':>12} {'first':>12} {'last':>12}  tag")
-    for col, n, mx, f, l, tag in summary:
+    for col, n, mx, f, end_date, tag in summary:
         if n == 0:
             print(f"  {col:<28} {n:>7} {'-':>12} {'-':>12} {'-':>12}  {tag}")
         else:
-            print(f"  {col:<28} {n:>7} {mx:>12.6f} {str(f.date()):>12} {str(l.date()):>12}  {tag}")
+            print(f"  {col:<28} {n:>7} {mx:>12.6f} {str(f.date()):>12} {str(end_date.date()):>12}  {tag}")
 
     # ── Verdict ─────────────────────────────────────────────────────────
     print("\n" + "=" * 78)
@@ -155,8 +155,8 @@ def main() -> int:
     if flagged or len(only_old) or unexpected_trailing:
         if flagged:
             print(f"UNEXPLAINED VALUE DIFFS in {len(flagged)} column(s):")
-            for col, n, mx, f, l in flagged:
-                print(f"  {col}: {n} diffs, max|diff|={mx:.6f}, {f.date()}..{l.date()}")
+            for col, n, mx, f, end_date in flagged:
+                print(f"  {col}: {n} diffs, max|diff|={mx:.6f}, {f.date()}..{end_date.date()}")
         if len(only_old):
             print(f"PARQUET HAS ROWS MISSING FROM MART-BUILD: {len(only_old)}")
         if unexpected_trailing:
