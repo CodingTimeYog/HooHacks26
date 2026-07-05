@@ -8,32 +8,27 @@
 *.pyd
 __pycache__/
 
-# SQLite database (runtime file — never commit)
-backend/gas_forecast.db
-backend/gas_forecast.db-shm
-backend/gas_forecast.db-wal
-
 # Trained ML models and generated cache (large binary files)
 data/models/
 data/processed/
 
-
-# OS
-.DS_Store
-Thumbs.db
-users.db
-
-.env
-logs/
-wandb/
-data/processed/*.parquet
-data/processed/cache.json
-foregast_dbt/target/
-foregast_dbt/dbt_packages/
-foregast_dbt/logs/
-# databases
+# Databases (runtime files — never commit)
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
+
+# Logs and experiment tracking
+logs/
+wandb/
+
+# dbt artifacts
+foregast_dbt/target/
+foregast_dbt/dbt_packages/
+foregast_dbt/logs/
+foregast_dbt/.user.yml
+
+# OS
+.DS_Store
+Thumbs.db

@@ -16,9 +16,7 @@ DATA  = os.path.join(ROOT, "data")
 
 load_dotenv(os.path.join(ROOT, ".env"))
 
-# TODO: make schema/table env-configurable (e.g. MART_TABLE env var defaulting
-# to this) once we have prod/staging envs. Hardcoded to dev_marts for now.
-MART_TABLE  = "dev_marts.mart_commodity_panel_monthly"
+MART_TABLE  = os.getenv("MART_TABLE", "dev_marts.mart_commodity_panel_monthly")
 _PANEL_COLS = ["ng_spot", "urea", "dap", "storage_mmcf"]
 
 FEATURE_COLS = [
@@ -279,14 +277,6 @@ def build_features(
     ng_std_12m  = df["ng_spot"].rolling(12).std()
     df["ng_zscore_12m"] = (df["ng_spot"] - ng_mean_12m) / ng_std_12m
 
-    # ── Local Context (Helps XGBoost handle price levels it hasn't seen)
-    df["urea_dist_from_ma3"] = df["urea"] - df["urea"].rolling(3).mean()
-    df["urea_dist_from_ma12"] = df["urea"] - df["urea"].rolling(12).mean()
-    df["ng_dist_from_ma3"] = df["ng_spot"] - df["ng_spot"].rolling(3).mean()
-    
-    # Spread feature (the absolute dollar difference between Urea and Gas costs)
-    # Gas is usually priced per MMBtu, Urea per ton. The raw distance is a strong proxy for manufacturer profit margins.
-    df["urea_ng_spread"] = df["urea"] - (df["ng_spot"] * 33.0) # Approx 33 MMBtu of gas to make 1 ton of Urea
     # ── DAP features
     df["dap_lag1"]      = df["dap"].shift(1)
     df["dap_urea_ratio"] = df["dap"] / df["urea"]

@@ -82,7 +82,6 @@ if not st.session_state.get("logged_in"):
 if "s" not in st.query_params and st.session_state.get("_session_token"):
     st.query_params["s"] = st.session_state["_session_token"]
 
-# Add this new line:
 CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "processed", "cache.json")
 
 
@@ -94,11 +93,11 @@ def load_cache():
         # Validate required top-level keys are present
         required = {"signal", "monte_carlo", "forecast", "model_metadata"}
         if not required.issubset(data.keys()):
-            print(f"🚨 Warning: cache.json is missing keys: {required - data.keys()}")
+            print(f"Warning: cache.json is missing keys: {required - data.keys()}")
             return None
         return data
     except Exception as e:
-        print(f"🚨 Warning: Could not load cache.json: {e}")
+        print(f"Warning: Could not load cache.json: {e}")
         return None
 
 # ── Database ─────────────────────────────────────────────────────────────────
@@ -248,13 +247,9 @@ def get_crop_colors_for_df(df: pd.DataFrame, season_base: dict) -> list:
     return colors
 
 
-# ── Fertilizer calculation (swap body with real function later) ───────────────
+# ── Fertilizer calculation ────────────────────────────────────────────────────
 def get_fertilizer_totals(crops_df: pd.DataFrame) -> dict:
     """
-    PLACEHOLDER — replace the body with a call to your calculation module, e.g.:
-        from backend.src.features.engineer import calculate_fertilizer
-        return calculate_fertilizer(crops_df)
-
     Receives the farmer's crops DataFrame (columns: crop_name, acres).
     Returns a dict with keys:
         fertilizer_used_lbs (float)  |  fertilizer_cost_usd (float)
@@ -273,7 +268,6 @@ def get_fertilizer_totals(crops_df: pd.DataFrame) -> dict:
     return {"fertilizer_used_lbs": used, "fertilizer_cost_usd": cost}
 
 
-# ── Price / risk data functions (swap bodies with real model calls later) ─────
 # ── State fertilizer exposure builder ────────────────────────────────────────
 def build_state_df(cache: dict) -> pd.DataFrame:
     """

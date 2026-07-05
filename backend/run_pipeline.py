@@ -1,6 +1,6 @@
 """
 run_pipeline.py — Loads trained models, generates forecast + Monte Carlo + signal,
-and writes data/processed/cache.json for the Express server to serve.
+and writes data/processed/cache.json for the FastAPI service and Streamlit app to serve.
 
 Run this after train_models.py. Re-run any time you want fresh forecasts.
 
