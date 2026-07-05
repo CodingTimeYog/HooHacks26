@@ -9,7 +9,7 @@ import json
 import pickle
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error
 import xgboost as xgb
 
@@ -24,6 +24,15 @@ MODELS_DIR = os.path.join(ROOT, "data", "models")
 import wandb
 from dotenv import load_dotenv
 load_dotenv(os.path.join(ROOT, ".env"))
+
+# Chronological evaluation boundaries.
+# HOLDOUT_START: first feature-row month of the held-out test window (~15% of
+# trainable rows by time). Everything from here on is never seen in training.
+# SHOCK_TARGET_START: test observations whose TARGET month falls on/after this
+# date are the 2026 supply-shock (out-of-distribution) stretch and are reported
+# separately — headline metrics come from the pre-shock window only.
+HOLDOUT_START      = "2022-01-01"
+SHOCK_TARGET_START = "2026-01-01"
 
 XGB_PARAMS = {
     "n_estimators":     100,
@@ -54,31 +63,55 @@ def _directional_accuracy(y_true, y_pred, y_prev):
 def train(feature_store: pd.DataFrame) -> dict:
     """
     Trains 3 XGBoost regressors (price level) + 3 XGBoost classifiers (direction)
-    using walk-forward CV. Saves models + metadata.
+    and saves models + metadata.
 
-    Data splits:
-      Training window : 1997-01 -> 2022-12  (312 months)
-      Test holdout     : 2023-01 -> 2026-02  (final evaluation only, never touched during training)
+    Evaluation protocol (chronological, no shuffling):
+      Training pool : first trainable month -> HOLDOUT_START - 1, additionally
+                      purged per horizon so no training row's forward target
+                      (month + horizon) lands inside the holdout window.
+      Test holdout  : feature rows from HOLDOUT_START onward — strictly after
+                      the training pool, never touched during training or CV.
+      Within the holdout, observations are bucketed by TARGET month:
+        pre-shock (target <= 2025-12) -> headline test_* metrics
+        shock     (target >= SHOCK_TARGET_START) -> *_shock_* metrics, reported
+                  separately as an out-of-distribution stretch (small n).
+      *_full_* metrics cover the whole holdout for reference.
 
-    Recency weighting: observations are weighted linearly from 1.0 (Jan 1997)
-    to 2.0 (Dec 2022) so recent market conditions have twice the influence of
-    the oldest data.
+    Walk-forward CV (TimeSeriesSplit, 5 folds) runs inside the training pool;
+    its residual stats are stored as cv_residual_* for reference. The
+    residual_mean/std_t{h} keys that feed the Monte Carlo simulation come from
+    the PRE-SHOCK holdout residuals of the evaluation model.
+
+    Deployed artifacts: after evaluation, models are refit on the FULL
+    trainable history (training pool + holdout) with the same recency
+    weighting, and those refit models are what gets pickled. All metadata
+    metrics refer to the pre-refit chronological-holdout evaluation.
+
+    Recency weighting: training observations are weighted linearly from 1.0
+    (oldest) to 1.5 (newest month in the training pool).
     """
     os.makedirs(MODELS_DIR, exist_ok=True)
 
     # Only rows where ALL features AND ALL targets are defined
     df_train = feature_store.dropna(subset=FEATURE_COLS + TARGET_COLS).copy()
 
-    # NEW CODE: Pure Direction (Aligns perfectly with the Momentum features)
-    for horizon in [1, 2, 3]:            
+    # Direction labels: did urea rise between now and the target month?
+    for horizon in [1, 2, 3]:
         target_col = f"target_urea_t{horizon}"
         df_train.loc[:, f"dir_t{horizon}"] = (
             df_train[target_col] > df_train["urea"]
         ).astype(int)
-        
+
+    holdout_start = pd.Timestamp(HOLDOUT_START)
+    shock_start   = pd.Timestamp(SHOCK_TARGET_START)
+
     metadata = {
-        "training_window_start": "1997-01",
-        "training_window_end":   "2026-02",
+        "training_window_start": df_train.index.min().strftime("%Y-%m"),
+        # Nominal boundary; per-horizon purge trims up to `horizon` further months.
+        "training_window_end":   (holdout_start - pd.DateOffset(months=1)).strftime("%Y-%m"),
+        "holdout_start":         holdout_start.strftime("%Y-%m"),
+        "holdout_end":           df_train.index.max().strftime("%Y-%m"),
+        "shock_target_start":    shock_start.strftime("%Y-%m"),
         "feature_cols":          FEATURE_COLS,
     }
 
@@ -110,11 +143,18 @@ def train(feature_store: pd.DataFrame) -> dict:
         y_clf = df_train[f"dir_t{horizon}"]
         X     = df_train[FEATURE_COLS]
 
-        X_tv, X_test, y_tv, y_test = train_test_split(X, y_reg, test_size=0.15, random_state=42)
-        _, _, y_tv_cl, y_test_dir = train_test_split(X, y_clf, test_size=0.15, random_state=42)
+        # Chronological split. Training rows are additionally purged so their
+        # forward-looking target (month + horizon) lands strictly before the
+        # holdout window — otherwise boundary rows train on test-period prices.
+        target_month = X.index + pd.DateOffset(months=horizon)
+        train_mask   = np.asarray(target_month < holdout_start)
+        test_mask    = np.asarray(X.index >= holdout_start)
+
+        X_tv,   y_tv,   y_tv_cl    = X[train_mask], y_reg[train_mask], y_clf[train_mask]
+        X_test, y_test, y_test_dir = X[test_mask],  y_reg[test_mask],  y_clf[test_mask]
 
         t = (X_tv.index - X_tv.index.min()).days.astype(float)
-        weights_tv = 1.0 + 0.5 * (t / t.max())
+        weights_tv = np.asarray(1.0 + 0.5 * (t / t.max()))
 
         tscv = TimeSeriesSplit(n_splits=5, gap=1)
         cv_residuals = []
@@ -128,54 +168,104 @@ def train(feature_store: pd.DataFrame) -> dict:
             preds = m.predict(X_vl)
             cv_residuals.extend((y_vl.values - preds).tolist())
 
-        # Final regressor
+        # Evaluation regressor / classifier — fit on the training pool only,
+        # so holdout metrics below are genuinely out-of-sample.
         model = xgb.XGBRegressor(**XGB_PARAMS)
         model.fit(X_tv, y_tv, sample_weight=weights_tv)
 
-        # Final direction classifier
         clf = xgb.XGBClassifier(**XGB_CLF_PARAMS)
         clf.fit(X_tv, y_tv_cl, sample_weight=weights_tv)
 
-        # Persist both
+# --- Evaluate on the chronological holdout ---
+        test_preds  = model.predict(X_test)
+        dir_preds   = clf.predict(X_test)
+        y_prev      = df_train.loc[X_test.index, "urea"].values
+
+        # Bucket test observations by TARGET month: a late-2025 feature row
+        # predicting into 2026 belongs to the shock stretch.
+        test_target_month = X_test.index + pd.DateOffset(months=horizon)
+        shock = np.asarray(test_target_month >= shock_start)
+        pre   = ~shock
+
+        def _window_metrics(mask: np.ndarray) -> dict:
+            return {
+                "rmse":    _rmse(y_test.values[mask], test_preds[mask]),
+                "mae":     float(mean_absolute_error(y_test.values[mask], test_preds[mask])),
+                "dir_acc": _directional_accuracy(y_test.values[mask], test_preds[mask], y_prev[mask]),
+                "clf_acc": float(np.mean(dir_preds[mask] == y_test_dir.values[mask])),
+            }
+
+        m_pre  = _window_metrics(pre)
+        m_full = _window_metrics(np.ones(len(X_test), dtype=bool))
+        m_shock = _window_metrics(shock) if shock.any() else None
+
+        # Headline (schema-stable) keys = pre-shock window.
+        metadata[f"test_rmse_t{horizon}"]    = m_pre["rmse"]
+        metadata[f"test_mae_t{horizon}"]     = m_pre["mae"]
+        metadata[f"test_dir_acc_t{horizon}"] = m_pre["dir_acc"]
+        metadata[f"test_clf_acc_t{horizon}"] = m_pre["clf_acc"]
+        metadata[f"n_test_preshock_t{horizon}"] = int(pre.sum())
+        metadata[f"n_test_shock_t{horizon}"]    = int(shock.sum())
+
+        for name, m in (("full", m_full), ("shock", m_shock)):
+            if m is None:
+                continue
+            metadata[f"test_rmse_{name}_t{horizon}"]    = m["rmse"]
+            metadata[f"test_mae_{name}_t{horizon}"]     = m["mae"]
+            metadata[f"test_dir_acc_{name}_t{horizon}"] = m["dir_acc"]
+            metadata[f"test_clf_acc_{name}_t{horizon}"] = m["clf_acc"]
+
+        # Monte Carlo residuals: pre-shock holdout residuals of the final model —
+        # recent, unseen, and not distorted by the out-of-distribution shock months.
+        mc_residuals = y_test.values[pre] - test_preds[pre]
+        metadata[f"residual_mean_t{horizon}"] = float(mc_residuals.mean())
+        metadata[f"residual_std_t{horizon}"]  = float(mc_residuals.std())
+
+        # Walk-forward CV residuals, kept for reference/comparison.
+        cv_res = np.asarray(cv_residuals)
+        metadata[f"cv_residual_mean_t{horizon}"] = float(cv_res.mean())
+        metadata[f"cv_residual_std_t{horizon}"]  = float(cv_res.std())
+
+        wandb.log({
+            "horizon":                horizon,
+            "horizon_days":           horizon * 30,
+            "test_rmse":              m_pre["rmse"],
+            "test_mae":               m_pre["mae"],
+            "directional_acc":        m_pre["dir_acc"],
+            "clf_acc":                m_pre["clf_acc"],
+            "test_rmse_full":         m_full["rmse"],
+            "test_rmse_shock":        m_shock["rmse"] if m_shock else None,
+            "n_test_preshock":        int(pre.sum()),
+            "n_test_shock":           int(shock.sum()),
+            "residual_std":           metadata[f"residual_std_t{horizon}"],
+            "residual_mean":          metadata[f"residual_mean_t{horizon}"],
+            "cv_residual_std":        metadata[f"cv_residual_std_t{horizon}"],
+        })
+        wandb.finish()
+
+        # Deployed artifacts: refit on ALL trainable rows (train + holdout) so
+        # the served forecast uses the full history. The metrics stored above
+        # were measured on the chronological holdout BEFORE this refit and are
+        # the honest estimate of this configuration's out-of-sample error.
+        t_all = (X.index - X.index.min()).days.astype(float)
+        weights_all = np.asarray(1.0 + 0.5 * (t_all / t_all.max()))
+
+        model = xgb.XGBRegressor(**XGB_PARAMS)
+        model.fit(X, y_reg, sample_weight=weights_all)
+        clf = xgb.XGBClassifier(**XGB_CLF_PARAMS)
+        clf.fit(X, y_clf, sample_weight=weights_all)
+
         with open(os.path.join(MODELS_DIR, f"xgb_urea_t{horizon}.pkl"), "wb") as f:
             pickle.dump(model, f)
         with open(os.path.join(MODELS_DIR, f"xgb_dir_t{horizon}.pkl"), "wb") as f:
             pickle.dump(clf, f)
 
-# --- Evaluate on the 15% Random Holdout Set ---
-        test_preds  = model.predict(X_test)
-        dir_preds   = clf.predict(X_test)
-        
-        # Pull the actual "current" urea prices matching the random test dates
-        y_prev = df_train.loc[X_test.index, "urea"].values
-
-        metadata[f"test_rmse_t{horizon}"]    = _rmse(y_test, test_preds)
-        metadata[f"test_mae_t{horizon}"]     = float(mean_absolute_error(y_test, test_preds))
-        metadata[f"test_dir_acc_t{horizon}"] = _directional_accuracy(y_test.values, test_preds, y_prev)
-        metadata[f"test_clf_acc_t{horizon}"] = float(np.mean(dir_preds == y_test_dir.values))
-        
-        mc_residuals = y_test.values - test_preds
-
-        metadata[f"residual_mean_t{horizon}"] = float(mc_residuals.mean())
-        metadata[f"residual_std_t{horizon}"]  = float(mc_residuals.std())
-
-        clf_acc = metadata.get(f"test_clf_acc_t{horizon}", 0)
-        wandb.log({
-            "horizon":          horizon,
-            "horizon_days":     horizon * 30,
-            "test_rmse":        metadata[f"test_rmse_t{horizon}"],
-            "test_mae":         metadata[f"test_mae_t{horizon}"],
-            "directional_acc":  metadata[f"test_dir_acc_t{horizon}"],
-            "clf_acc":          metadata[f"test_clf_acc_t{horizon}"],
-            "residual_std":     metadata[f"residual_std_t{horizon}"],
-            "residual_mean":    metadata[f"residual_mean_t{horizon}"],
-        })
-        wandb.finish()
-
         print(
-            f"  t{horizon}: clf_dir_acc={clf_acc*100:.0f}% | "
-            f"MC residual_std=${mc_residuals.std():.1f} (test) | "
-            f"test_rmse=${metadata.get(f'test_rmse_t{horizon}', 0):.1f}"
+            f"  t{horizon}: pre-shock rmse=${m_pre['rmse']:.1f} "
+            f"dir_acc={m_pre['dir_acc']*100:.0f}% clf_acc={m_pre['clf_acc']*100:.0f}% "
+            f"(n={int(pre.sum())}) | full rmse=${m_full['rmse']:.1f} | "
+            f"shock rmse={'$' + format(m_shock['rmse'], '.1f') if m_shock else 'n/a'} "
+            f"(n={int(shock.sum())})"
         )
 
     meta_path = os.path.join(MODELS_DIR, "model_metadata.json")

@@ -1,6 +1,6 @@
 # foreGASt — Fertilizer Price Forecasting
 
-Forecasting urea (and DAP) fertilizer prices 1–3 months ahead from natural-gas market signals, served as a probabilistic buy/wait recommendation for farmers. Built end-to-end: a versioned data pipeline, a dbt-modeled analytics mart, an XGBoost + Monte Carlo forecasting layer, and a FastAPI inference service behind a Streamlit app.
+Forecasting urea (and DAP) fertilizer prices 1–3 months ahead from natural-gas market signals, served as a probabilistic buy/wait recommendation for farmers. Built end-to-end: a Postgres-backed data pipeline, a dbt-modeled analytics mart, an XGBoost + Monte Carlo forecasting layer, and a FastAPI inference service behind a Streamlit app.
 
 > Thesis: natural gas is the dominant feedstock for nitrogen fertilizer, and Henry Hub price movements lead urea by roughly 4–6 months. foreGASt turns that lead-lag relationship into a calibrated forecast with explicit uncertainty.
 
@@ -39,21 +39,27 @@ World Bank ┘                                                                  
                                               FastAPI service (/forecast/urea)          Streamlit app
 ```
 
-Data lineage is enforced by a **parity gate** (`scripts/validate_mart_parity.py`) that checks the dbt mart against the legacy pipeline cell-for-cell before any model trains. Every data feed — staging, daily moving-average features, fertilizer prices, and the history payload — is sourced from the same dbt mart, with local-file fallbacks when the database is unavailable.
+Data lineage is validated by a **parity gate** (`scripts/validate_mart_parity.py`) that checks the dbt mart against the legacy pipeline cell-for-cell. Every data feed — staging, daily moving-average features, fertilizer prices, and the history payload — is sourced from the same Postgres/dbt data layer, with local-file fallbacks when the database is unavailable.
 
 ## Methodology notes
 
-- **Validation:** walk-forward cross-validation (`TimeSeriesSplit`, 5 folds, 1-month gap) for model selection, with recency-weighted training.
+- **Validation:** walk-forward cross-validation (`TimeSeriesSplit`, 5 folds, 1-month gap) for residual estimation, with recency-weighted training.
 - **Uncertainty:** forecasts are distributions, not point estimates — the Monte Carlo band and probability of rising are first-class outputs, and the buy/wait signal is derived from them.
 - **Honesty about regime breaks:** in early 2026 a real fertilizer supply shock (Strait of Hormuz disruption) pushed urea to multi-year highs. The model's error widens through that window because it's a genuine out-of-distribution event, not a model defect — the forecast confidence should be discounted during such breaks. This is surfaced rather than hidden.
 
 ## Results
 
-> Reported on a held-out test set in the pre-shock (stationary) price regime:
-> - 90-day direction accuracy: **~XX%** *(pin exact figure before publishing)*
-> - 90-day price RMSE: **~$XX/mt** *(pre-shock holdout; error is higher across the 2026 supply-shock window by design)*
+Evaluated on a genuine **chronological holdout** (2022-01 onward, purged per horizon) — not a random split. An earlier version of this evaluation used a shuffled `train_test_split`, which leaked future rows into training and overstated performance by roughly 1.7x on RMSE; that bug was found and fixed, and the numbers below are the corrected, honest results.
 
-*(Replace the above with your final temporal-holdout numbers once locked.)*
+> **90-day (t3) horizon — headline metric**, held out on 2022–2025 data (a window that includes the 2022 natural-gas price spike, making it a credible stress test):
+> - Regressor-implied direction accuracy: **~71%** (dedicated direction classifier: **~67%**)
+> - Price RMSE: **~$135/mt**
+
+The 30- and 60-day horizons are weaker on this corrected split (direction-classifier accuracy near chance on t1/t2), which is itself an honest finding: shorter horizons are noisier and harder to call reliably from monthly commodity data. The 90-day horizon, where the natural-gas lead-lag signal has more time to express itself, is where the model earns its keep.
+
+**On the 2026 supply shock:** evaluated separately as its own out-of-distribution window (n=3–5 months, too small to be conclusive on its own) rather than blended into the headline metric — error widens sharply there, as expected for a genuine regime break the model has no training precedent for.
+
+**Methodology note:** the reported metrics come from a model evaluated on a held-out window; the deployed model is subsequently refit on the full available history (same features, same recency weighting) so live forecasts use the most current data. This eval/deploy split is standard practice and is documented in code.
 
 ## Tech stack
 
@@ -107,7 +113,7 @@ docs/             architecture
 ## Roadmap
 
 - Cloud deployment: containerized API on AWS Lambda + API Gateway, scheduled refresh via EventBridge → Fargate, forecast cache on S3.
-- Temporal-holdout reporting and a soft data-quality alert on anomalous month-over-month moves.
+- A soft data-quality alert on anomalous month-over-month moves.
 
 ## License & data
 
