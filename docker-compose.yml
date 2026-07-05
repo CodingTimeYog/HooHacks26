@@ -1,17 +1,45 @@
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_DB: foregast
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d foregast"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   agrisignal:
     build: .
     ports:
       - "8501:8501"
     env_file:
       - .env
+    environment:
+      # Inside the compose network the DB host is the service name, not localhost.
+      DATABASE_URL: postgresql+psycopg2://postgres:devpass@postgres:5432/foregast
+      POSTGRES_HOST: postgres
+      # Log W&B runs locally inside the container; remove to log to the cloud.
+      WANDB_MODE: offline
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - db_data:/app/db
-      - ./backend:/app/backend      # ← add this line
-      - ./app.py:/app/app.py        # ← and this
-      - ./pages:/app/pages          # ← and this
-      - ./data:/app/data   
-
+      - ./backend:/app/backend
+      - ./app.py:/app/app.py
+      - ./pages:/app/pages
+      - ./data:/app/data
+      - ./foregast_dbt:/app/foregast_dbt
     restart: unless-stopped
+
 volumes:
   db_data:
+  pg_data:

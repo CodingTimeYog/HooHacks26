@@ -1,0 +1,12 @@
+foregast_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: 5432
+      user: postgres
+      pass: "{{ env_var('POSTGRES_PASSWORD', 'devpass') }}"
+      dbname: foregast
+      schema: dev
+      threads: 4
