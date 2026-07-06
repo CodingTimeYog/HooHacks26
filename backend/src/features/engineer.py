@@ -281,8 +281,13 @@ def build_features(
     df["dap_urea_ratio"] = df["dap"] / df["urea"]
 
     # ── Storage z-score (low = tight supply = upward price pressure)
-    storage_mean = df["storage_mmcf"].mean()
-    storage_std  = df["storage_mmcf"].std()
+    # Expanding stats up to and including row t — matches the rolling-window
+    # convention used elsewhere in this file (rolling(N) includes t), and is
+    # leakage-safe because row t never sees rows > t. std() at row 0 is NaN,
+    # so storage_zscore is NaN only at the very first row; that row is already
+    # dropped by the 24-month urea z-score gating in the training filter.
+    storage_mean = df["storage_mmcf"].expanding().mean()
+    storage_std  = df["storage_mmcf"].expanding().std()
     df["storage_zscore"] = (df["storage_mmcf"] - storage_mean) / storage_std
 
     # ── Season dummies (quarter indicators)
