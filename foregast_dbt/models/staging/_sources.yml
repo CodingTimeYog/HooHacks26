@@ -9,6 +9,13 @@ sources:
     tables:
       - name: eia_ng_spot_daily
         description: "Henry Hub spot ($/MMBtu), daily, from EIA API v2 (series RNGWHHD)."
+        # Live-fetched every loader run, so `period` genuinely advances — freshness
+        # here means something. EIA typically posts the prior trading day's value
+        # next business day; a few days' lag around weekends/holidays is normal.
+        loaded_at_field: period
+        freshness:
+          warn_after: {count: 3, period: day}
+          error_after: {count: 7, period: day}
         columns:
           - name: period
             description: "Trade date."
@@ -19,6 +26,13 @@ sources:
 
       - name: eia_ng_storage_weekly
         description: "US Lower-48 working gas storage (BCF), weekly, from EIA API v2 (duoarea=R48, process=SWO)."
+        # Live-fetched every loader run. EIA's Weekly Natural Gas Storage Report
+        # publishes Thursdays, covering the week ending the prior Friday (~5-6
+        # day inherent lag) — thresholds are set past that, not at zero lag.
+        loaded_at_field: period
+        freshness:
+          warn_after: {count: 10, period: day}
+          error_after: {count: 15, period: day}
         columns:
           - name: period
             description: "Week-ending date."
@@ -27,6 +41,12 @@ sources:
             description: "Working gas in billions of cubic feet."
             tests: [not_null]
 
+      # No `freshness:` block on the three tables below: each is read from a static
+      # file checked into the repo (raw_sources.py's load_*_csv/xls functions), not
+      # fetched live. Their max `period` never advances between runs regardless of
+      # when the job executes, so a calendar-based freshness threshold would just be
+      # permanently red — a false signal, not a real one. `dbt source freshness`
+      # silently skips sources with no `loaded_at_field`, which is what we want here.
       - name: henry_hub_spot_monthly_csv
         description: "Henry Hub spot price ($/MMBtu), monthly. Backbone from local CSV (1997+)."
         columns:

@@ -1,0 +1,116 @@
+name: Publish dbt docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissions required by actions/deploy-pages (OIDC + Pages write).
+# Scoped to this workflow only — the main CI workflow keeps default (read) perms.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one concurrent Pages deploy; don't cancel an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: foregast
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d foregast"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:devpass@localhost:5432/foregast
+      EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require EIA_API_KEY
+        # No synthetic fallback — this job loads real data. Fail fast and
+        # clearly rather than letting raw_sources.py's RuntimeError surface
+        # after a full requirements.txt install.
+        run: |
+          if [ -z "$EIA_API_KEY" ]; then
+            echo "::error::EIA_API_KEY secret is not set — cannot bootstrap the raw schema. Add it under Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        # requirements.txt already pins dbt-postgres, so this covers both the
+        # loader and dbt in one install (same deps entrypoint.sh relies on).
+        run: pip install -r requirements.txt
+
+      - name: Load raw sources into Postgres
+        timeout-minutes: 10
+        run: python backend/src/ingestion/postgres_loader.py
+
+      - name: dbt run
+        run: dbt run --project-dir foregast_dbt --profiles-dir foregast_dbt
+
+      - name: dbt source freshness
+        # Only eia_ng_spot_daily / eia_ng_storage_weekly have a loaded_at_field
+        # configured (see _sources.yml) — the other three sources are static
+        # file backbones and are silently skipped, not reported as red.
+        # continue-on-error: a real freshness warning/error on live data is a
+        # legitimate finding, not a build failure — publish it, don't hide it.
+        continue-on-error: true
+        run: dbt source freshness --project-dir foregast_dbt --profiles-dir foregast_dbt
+
+      - name: dbt test
+        # Same reasoning as freshness above: a red test on real data should be
+        # visible on the published page, not block the deploy.
+        continue-on-error: true
+        run: dbt test --project-dir foregast_dbt --profiles-dir foregast_dbt
+
+      - name: dbt docs generate
+        run: dbt docs generate --project-dir foregast_dbt --profiles-dir foregast_dbt
+
+      - name: Assemble Pages artifact
+        # dbt's index.html fetches manifest.json/catalog.json from its own
+        # directory, so those three ship together under _site/docs/. The
+        # hand-written landing page + results page live at the site root —
+        # see scripts/render_docs_status.py for why they exist (dbt's static
+        # docs site doesn't surface test/freshness results on its own).
+        run: |
+          mkdir -p _site/docs
+          cp foregast_dbt/target/index.html    _site/docs/
+          cp foregast_dbt/target/manifest.json _site/docs/
+          cp foregast_dbt/target/catalog.json  _site/docs/
+          python scripts/render_docs_status.py \
+            --run-results foregast_dbt/target/run_results.json \
+            --sources foregast_dbt/target/sources.json \
+            --manifest foregast_dbt/target/manifest.json \
+            --out-dir _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
