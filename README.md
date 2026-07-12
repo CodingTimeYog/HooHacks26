@@ -1,5 +1,7 @@
 # foreGASt — Fertilizer Price Forecasting
 
+[![CI](https://github.com/CodingTimeYog/foregast/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CodingTimeYog/foregast/actions/workflows/ci.yml)
+
 Forecasting urea (and DAP) fertilizer prices 1–3 months ahead from natural-gas market signals, served as a probabilistic buy/wait recommendation for farmers. Built end-to-end: a data pipeline landing in Postgres, a dbt-modeled analytics mart, an XGBoost + Monte Carlo forecasting layer, and a FastAPI inference service behind a Streamlit app.
 
 > Thesis: natural gas is the dominant feedstock for nitrogen fertilizer, and Henry Hub price movements lead urea by roughly 4–6 months. foreGASt turns that lead-lag relationship into a probabilistic forecast with explicit, backtested uncertainty bands.
@@ -40,6 +42,8 @@ World Bank ┘                                                                  
 ```
 
 Data lineage is validated by a **parity gate** (`scripts/validate_mart_parity.py`) that checks the dbt mart against the legacy pipeline cell-for-cell — a manual check run before retraining, not yet wired into CI. Every data feed — staging, daily moving-average features, fertilizer prices, and the history payload — is sourced from the same Postgres/dbt data layer, with local-file fallbacks when the database is unavailable.
+
+📊 **Browse the data lineage:** [foregast dbt docs](https://codingtimeyog.github.io/foregast/) — auto-published on every push to `main` by `.github/workflows/docs.yml`. *(Placeholder: link goes live after the first successful docs workflow run to main and GitHub Pages is enabled in repo Settings — see workflow file for the exact steps.)*
 
 ## Methodology notes
 
